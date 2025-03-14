@@ -1,9 +1,10 @@
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+/* eslint-disable @typescript-eslint/no-unsafe-call */
+import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import * as https from 'https';
 import { firstValueFrom } from 'rxjs';
-import { getInvoiceSeries } from '../helpers/series-mapping'
+import { getInvoiceSeries } from '../helpers/series-mapping';
 
 @Injectable()
 export class SapInvoiceService {
@@ -14,7 +15,7 @@ export class SapInvoiceService {
 
   constructor(
     private readonly httpService: HttpService,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
   ) {
     this.sapHost = this.configService.get<string>('SAP_HOST') || '';
     this.sapUser = this.configService.get<string>('SAP_USER') || '';
@@ -22,31 +23,38 @@ export class SapInvoiceService {
   }
 
   async autoTransferInvoices() {
-    const companies = ['SBO_Alianza', 'SBO_FGE', 'SBO_MANUFACTURING'];
+    const companies = ['SBO_Pruebas'];
+    let totalFacturas = 0;
+    const errores: string[] = [];
 
     for (const company of companies) {
-      this.logger.log(`Iniciando transferencia de facturas para la empresa: ${company}`);
+      const companyName = company.replace(/^SBO_/, '');
+      this.logger.log(`Procesando empresa: ${companyName}`);
+
       const sessionId = await this.loginToSap(company);
       if (!sessionId) {
-        this.logger.warn(`No se pudo iniciar sesión para ${company}`);
+        const errorMsg = `No se pudo iniciar sesión para ${company}`;
+        this.logger.warn(errorMsg);
+        errores.push(errorMsg);
         continue;
       }
 
       try {
-        this.logger.log(`Sesión iniciada para ${company}. Obteniendo notas de entrega...`);
         const deliveryNotes = await this.fetchDeliveryNotes(sessionId);
-        this.logger.log(`Notas de entrega encontradas para ${company}: ${JSON.stringify(deliveryNotes)}`);
+        this.logger.log(`Notas encontradas: ${deliveryNotes.length}`);
 
         for (const deliveryNote of deliveryNotes) {
-          const invoiceSeries = getInvoiceSeries(company, deliveryNote.Series) || deliveryNote.Series;
+          const invoiceSeries =
+            getInvoiceSeries(company, deliveryNote.Series) ||
+            deliveryNote.Series;
 
           const invoiceData = {
             CardCode: deliveryNote.CardCode,
-            DocDate: new Date().toISOString().slice(0, 10),
+            DocDate: new Date().toISOString().split('T')[0],
             Comments: deliveryNote.Comments || '',
             Series: invoiceSeries,
             DocCurrency: deliveryNote.DocCurrency,
-            DocumentLines: deliveryNote.DocumentLines.map(line => ({
+            DocumentLines: deliveryNote.DocumentLines.map((line: any) => ({
               ItemCode: line.ItemCode,
               Quantity: line.Quantity,
               Price: line.Price,
@@ -57,42 +65,62 @@ export class SapInvoiceService {
             })),
           };
 
-          this.logger.log(`Enviando datos de factura para ${company}: ${JSON.stringify(invoiceData)}`);
-          const invoiceResponse = await this.createInvoice(sessionId, invoiceData);
-
+          const invoiceResponse = await this.createInvoice(
+            sessionId,
+            invoiceData,
+          );
           if (invoiceResponse) {
-            this.logger.log(`Factura creada para ${company} - CardCode: ${deliveryNote.CardCode}`);
+            totalFacturas++;
+            this.logger.log(
+              `Factura creada para ${company} - CardCode: ${deliveryNote.CardCode} - DocEntry: ${invoiceResponse.DocEntry}`,
+            );
           } else {
-            this.logger.error(`Error al crear la factura para ${company}`);
+            const errorMsg = `Error al crear la factura para ${company}`;
+            this.logger.error(errorMsg);
+            errores.push(errorMsg);
           }
         }
       } catch (error) {
-        this.logger.error(`Error procesando facturas para ${company}: ${error.message}`);
+        const errorMsg = `Error en ${company}: ${error.message}`;
+        this.logger.error(errorMsg);
+        errores.push(errorMsg);
       } finally {
-        this.logger.log(`Cerrando sesión para ${company}`);
         await this.logoutFromSap(sessionId);
       }
     }
+
+    this.logger.log(`Total de facturas creadas: ${totalFacturas}`);
+    if (errores.length > 0) {
+      this.logger.error(`Errores detectados: ${errores.join(', ')}`);
+    }
+
+    return { totalFacturas, errores };
   }
 
   private async loginToSap(company: string): Promise<string | null> {
     const agent = new https.Agent({ rejectUnauthorized: false });
 
     try {
-      const response = await firstValueFrom(this.httpService.post(
-        `${this.sapHost}/b1s/v1/Login`,
-        {
-          CompanyDB: company,
-          UserName: this.sapUser,
-          Password: this.sapPassword,
-        },
-        { httpsAgent: agent }
-      ));
+      const response = await firstValueFrom(
+        this.httpService.post(
+          `${this.sapHost}/b1s/v1/Login`,
+          {
+            CompanyDB: company,
+            UserName: this.sapUser,
+            Password: this.sapPassword,
+          },
+          { httpsAgent: agent },
+        ),
+      );
 
-      this.logger.log(`Sesión iniciada con éxito para ${company}`);
+      const companyName = company.replace(/^SBO_/, '');
+      this.logger.log(`Sesión iniciada con éxito para ${companyName}`);
+
       return response.data?.SessionId ?? null;
     } catch (error) {
-      this.logger.error(`Error al iniciar sesión en SAP para ${company}: ${error.message}`);
+      this.logger.error(
+        `Error al iniciar sesión en SAP para ${company}: ${error.message}`,
+      );
       return null;
     }
   }
@@ -102,13 +130,15 @@ export class SapInvoiceService {
 
     try {
       const response = await firstValueFrom(
-        this.httpService.get(`${this.sapHost}/b1s/v1/DeliveryNotes?$filter=DocumentStatus eq 'bost_Open' and U_Auto_Auditoria eq 'N'&$top=1`, {
-          httpsAgent: agent,
-          headers: { Cookie: `B1SESSION=${sessionId}` },
-        })
+        this.httpService.get(
+          `${this.sapHost}/b1s/v1/DeliveryNotes?$filter=DocumentStatus eq 'bost_Open' and U_Auto_Auditoria eq 'N'&$top=10`,
+          {
+            httpsAgent: agent,
+            headers: { Cookie: `B1SESSION=${sessionId}` },
+          },
+        ),
       );
 
-      this.logger.log(`Notas de entrega obtenidas: ${JSON.stringify(response.data?.value || [])}`);
       return response.data?.value || [];
     } catch (error) {
       this.logger.error(`Error al obtener notas de entrega: ${error.message}`);
@@ -116,24 +146,29 @@ export class SapInvoiceService {
     }
   }
 
-  private async createInvoice(sessionId: string, invoiceData: any): Promise<boolean> {
+  private async createInvoice(
+    sessionId: string,
+    invoiceData: any,
+  ): Promise<any> {
     const agent = new https.Agent({ rejectUnauthorized: false });
 
     try {
-      const response = await firstValueFrom(this.httpService.post(
-        `${this.sapHost}/b1s/v1/Invoices`,
-        invoiceData,
-        {
+      const response = await firstValueFrom(
+        this.httpService.post(`${this.sapHost}/b1s/v1/Invoices`, invoiceData, {
           httpsAgent: agent,
           headers: { Cookie: `B1SESSION=${sessionId}` },
-        }
-      ));
+        }),
+      );
 
-      this.logger.log(`Factura creada con éxito: ${response.status}`);
-      return response.status === 201;
+      this.logger.log(
+        `Factura creada con éxito: DocEntry ${response.data.DocEntry}`,
+      );
+      return response.data;
     } catch (error) {
-      this.logger.error(`Error creando factura: ${error.message}`);
-      return false;
+      this.logger.error(
+        `Error creando factura: ${JSON.stringify(error.response?.data?.error) || error.message}`,
+      );
+      return null;
     }
   }
 
@@ -148,8 +183,8 @@ export class SapInvoiceService {
           {
             httpsAgent: agent,
             headers: { Cookie: `B1SESSION=${sessionId}` },
-          }
-        )
+          },
+        ),
       );
       this.logger.log(`Sesión cerrada con éxito.`);
     } catch (error) {

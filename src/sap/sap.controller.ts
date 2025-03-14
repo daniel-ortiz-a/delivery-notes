@@ -5,7 +5,7 @@ import { SapService } from './sap.service';
 export class SapController {
   constructor(private readonly sapService: SapService) {}
 
-  @Post('login/:companyDb')  // 📌 Ahora la empresa va en la URL
+  @Post('login/:companyDb') // 📌 Ahora la empresa va en la URL
   async login(@Param('companyDb') companyDb: string) {
     return this.sapService.login(companyDb);
   }

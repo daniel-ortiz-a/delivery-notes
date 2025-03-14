@@ -61,10 +61,10 @@ export class SapService {
         console.log('Sesión iniciada con ID:', this.sessionId);
 
         return {
-            sessionId: this.sessionId!, // 👈 Se fuerza a string, ya que en este punto no puede ser null
-            version: response.data.Version,
-            sessionTimeout: response.data.SessionTimeout,
-          };
+          sessionId: this.sessionId!, // 👈 Se fuerza a string, ya que en este punto no puede ser null
+          version: response.data.Version,
+          sessionTimeout: response.data.SessionTimeout,
+        };
       }
 
       throw new InternalServerErrorException('Error al iniciar sesión en SAP');
