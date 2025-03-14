@@ -23,7 +23,7 @@ export class SapInvoiceService {
   }
 
   async autoTransferInvoices() {
-    const companies = ['SBO_Pruebas'];
+    const companies = ['SBO_Alianza', 'SBO_FGE', 'SBO_MANUFACTURING'];
     let totalFacturas = 0;
     const errores: string[] = [];
 
@@ -40,7 +40,7 @@ export class SapInvoiceService {
       }
 
       try {
-        const deliveryNotes = await this.fetchDeliveryNotes(sessionId);
+        const deliveryNotes = await this.fetchDeliveryNotes(sessionId, company);
         this.logger.log(`Notas encontradas: ${deliveryNotes.length}`);
 
         for (const deliveryNote of deliveryNotes) {
@@ -125,13 +125,35 @@ export class SapInvoiceService {
     }
   }
 
-  private async fetchDeliveryNotes(sessionId: string): Promise<any[]> {
+  private readonly allowedCardCodes = {
+    SBO_Alianza: [
+      'Alianza Público en General',
+      '04166',
+      '06379',
+      '06456',
+      '06519',
+      '06520',
+      '06521',
+      '06522',
+    ],
+    SBO_FGE: ['MOSTR2'],
+    SBO_MANUFACTURING: ['C-0182'],
+  };
+
+  private async fetchDeliveryNotes(
+    sessionId: string,
+    company: string,
+  ): Promise<any[]> {
     const agent = new https.Agent({ rejectUnauthorized: false });
+    const allowedCodes = this.allowedCardCodes[company] || [];
+    const cardCodeFilter = allowedCodes
+      .map((code) => `CardCode eq '${code}'`)
+      .join(' or ');
 
     try {
       const response = await firstValueFrom(
         this.httpService.get(
-          `${this.sapHost}/b1s/v1/DeliveryNotes?$filter=DocumentStatus eq 'bost_Open' and U_Auto_Auditoria eq 'N'&$top=10`,
+          `${this.sapHost}/b1s/v1/DeliveryNotes?$filter=(DocumentStatus eq 'bost_Open' and U_Auto_Auditoria eq 'N') and (${cardCodeFilter})&$top=10`,
           {
             httpsAgent: agent,
             headers: { Cookie: `B1SESSION=${sessionId}` },

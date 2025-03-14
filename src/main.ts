@@ -10,8 +10,10 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') ?? 3000;
 
+  // Enable shutdown hooks for proper cleanup of scheduled tasks
+  app.enableShutdownHooks();
+
   await app.listen(port);
   console.log(`🚀 Server running on http://localhost:${port}`);
 }
-
 bootstrap();
