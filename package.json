@@ -27,7 +27,7 @@
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^5.0.1",
-    "@nestjs/swagger": "^11.0.7",
+    "@nestjs/swagger": "^11.1.0",
     "axios": "^1.8.4",
     "date-fns": "^4.1.0",
     "moment-timezone": "^0.5.47",

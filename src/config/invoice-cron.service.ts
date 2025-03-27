@@ -1,7 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { SapInvoiceService } from '../sap-invoice/sap-invoice.service';
 
+/**
+ * Servicio que maneja las tareas programadas para la facturación automática
+ * Este servicio ejecuta diferentes tareas cron para procesar notas de entrega
+ * según diferentes horarios y criterios:
+ * - Días hábiles: Lunes a Viernes de 18:40 a 23:30 cada 10 minutos
+ * - Sábados: De 12:00 a 13:00 cada 10 minutos
+ * - Público general: Cada 72 horas
+ * - Fin de mes: Días 28-31 de cada mes de 18:40 a 23:30 cada 10 minutos
+ */
 @Injectable()
 export class InvoiceCronService {
   private readonly logger = new Logger(InvoiceCronService.name);
@@ -76,6 +85,23 @@ export class InvoiceCronService {
 
     this.logger.log('Ejecutando cron de facturación de fin de mes');
     await this.sapInvoiceService.autoTransferInvoices();
+  }
+
+  /**
+   * Maneja la transferencia automática de albaranes a facturas
+   * Este método se ejecuta cada 30 minutos como respaldo
+   */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async handleAutoTransfer() {
+    this.logger.log(
+      'Iniciando transferencia automática de albaranes a facturas...',
+    );
+    try {
+      await this.sapInvoiceService.autoTransferInvoices();
+      this.logger.log('Transferencia automática completada exitosamente');
+    } catch (error) {
+      this.logger.error('Error durante la transferencia automática:', error);
+    }
   }
 
   private startCountdown() {
