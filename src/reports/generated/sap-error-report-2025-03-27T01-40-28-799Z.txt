@@ -1,0 +1,24 @@
+REPORTE DE ERRORES SAP
+=====================
+
+Fecha de inicio: 26/3/2025, 7:40:00 p.m.
+Fecha de fin: 26/3/2025, 7:40:28 p.m.
+Duración: 0 minutos
+
+Total de documentos procesados: 38
+Total de errores encontrados: 0
+
+ESTADÍSTICAS POR EMPRESA
+=======================
+
+SBO_Alianza:
+  - Documentos procesados: 18
+  - Errores encontrados: 0
+
+SBO_FGE:
+  - Documentos procesados: 20
+  - Errores encontrados: 0
+
+DETALLE DE ERRORES
+=================
+
