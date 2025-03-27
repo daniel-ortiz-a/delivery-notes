@@ -10,6 +10,7 @@ interface ErrorReport {
   docEntry?: number;
   errorCode: number;
   errorMessage: string;
+  sapErrorMessage?: string;
   details?: string;
 }
 
@@ -128,18 +129,44 @@ export class ReportService {
     report += 'DETALLE DE ERRORES\n';
     report += '=================\n\n';
 
-    for (const error of this.currentReport.errors) {
-      report += `Fecha: ${this.formatDate(error.timestamp)}\n`;
-      report += `Empresa: ${error.company}\n`;
-      if (error.docEntry) {
-        report += `DocEntry: ${error.docEntry}\n`;
+    // Agrupar errores por tipo
+    const errorTypes = {
+      '-5000': 'Error al crear la factura',
+      '-5001': 'Nota no cumple con el criterio de 72 horas',
+      '-5002': 'Nota ya facturada anteriormente',
+      '-5003': 'Error de validación en los datos de la factura',
+      '-5004': 'Error en el formato de los datos enviados',
+      '-5005': 'Error de permisos o autorización en SAP',
+      '-5006': 'Error de conexión con la base de datos SAP',
+      '-5007': 'Error en la validación de la serie de facturación',
+      '-5008': 'Error en la validación del cliente (CardCode)',
+      '-5009': 'Error en la validación de los artículos',
+      '-5010': 'Error en la validación de cantidades o precios',
+    };
+
+    for (const [errorCode, errorDescription] of Object.entries(errorTypes)) {
+      const errorsOfType = this.currentReport.errors.filter(
+        (e) => e.errorCode === parseInt(errorCode),
+      );
+
+      if (errorsOfType.length > 0) {
+        report += `${errorDescription} (Código ${errorCode})\n`;
+        report += '----------------------------------------\n\n';
+
+        for (const error of errorsOfType) {
+          report += `Empresa: ${error.company}\n`;
+          report += `DocEntry: ${error.docEntry}\n`;
+          report += `CardCode: ${error.details?.match(/CardCode: ([^,]+)/)?.[1] || 'N/A'}\n`;
+          report += `Fecha: ${this.formatDate(error.timestamp)}\n`;
+          if (error.sapErrorMessage) {
+            report += `Error SAP: ${error.sapErrorMessage}\n`;
+          }
+          if (error.details) {
+            report += `Detalles: ${error.details}\n`;
+          }
+          report += '-------------------\n\n';
+        }
       }
-      report += `Código de error: ${error.errorCode}\n`;
-      report += `Mensaje: ${error.errorMessage}\n`;
-      if (error.details) {
-        report += `Detalles: ${error.details}\n`;
-      }
-      report += '-------------------\n\n';
     }
 
     return report;

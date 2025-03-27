@@ -4,6 +4,7 @@ export interface SapError {
   docEntry?: number;
   errorCode: number;
   errorMessage: string;
+  sapErrorMessage?: string;
   details?: string;
 }
 
