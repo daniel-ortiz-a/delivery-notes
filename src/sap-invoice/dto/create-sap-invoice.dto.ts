@@ -2,6 +2,7 @@ export class CreateSapInvoiceDto {
   CardCode: string;
   DocDate: string;
   Comments?: string;
+  DocTotal?: number;
   Series: number;
   DocCurrency: string;
   DocumentLines: {

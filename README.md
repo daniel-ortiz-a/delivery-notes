@@ -96,3 +96,141 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
+# Delivery Notes - Facturación Automática SAP
+
+## Descripción
+
+Sistema de facturación automática que integra notas de entrega con SAP B1, desarrollado con NestJS. Este sistema automatiza el proceso de facturación de notas de entrega, reduciendo errores manuales y mejorando la eficiencia del proceso.
+
+## Características Principales
+
+### Facturación Automática
+
+- **Procesamiento de Notas**: Convierte automáticamente notas de entrega en facturas en SAP B1
+- **Múltiples Empresas**: Soporta tres bases de datos SAP diferentes:
+  - SBO_Alianza: Base de datos principal
+  - SBO_FGE: Base de datos para FGE
+  - SBO_MANUFACTURING: Base de datos para manufactura
+- **Sistema de Paginación**: Procesa las notas en lotes de 10 para evitar sobrecarga
+- **Validación de Duplicados**: Evita la facturación duplicada de notas
+- **Manejo de Errores**: Sistema detallado de captura y registro de errores SAP
+
+### Filtros de Facturación
+
+1. **Público General**
+
+   - Sistema de filtrado por códigos de cliente específicos:
+     - SBO_Alianza: Clientes de alianza (7 códigos específicos)
+     - SBO_FGE: Cliente MOSTR2
+     - SBO_MANUFACTURING: Cliente C-0182
+   - Para clientes de público general, se aplica la regla de 72 horas:
+     - Las notas se facturan después de 72 horas desde su fecha de creación
+     - Ejemplo: Una nota del 20 de marzo se facturará el 23 de marzo
+   - Para otros clientes, no se aplica la regla de 72 horas
+
+2. **Criterios de Filtrado**
+   - **Estado de Nota**: Solo procesa notas con estado 'bost_Open' (abiertas)
+   - **Auditoría**: Excluye notas marcadas para auditoría (U_Auto_Auditoria = 'N')
+   - **Fecha**: Procesa notas con fecha anterior a la actual para evitar facturas futuras
+
+### Programación
+
+- **Ejecución Automática**:
+  - Lunes a Viernes: Cada 10 minutos de 18:40 a 23:30
+  - Sábados: Cada 10 minutos de 12:00 a 13:00
+  - No se ejecuta en domingos
+- **Configuración Cron**:
+  - Monitoreo de ejecuciones previas
+  - Prevención de ejecuciones simultáneas
+- **Monitoreo**: Sistema de logs detallado de cada ejecución
+
+### Reportes
+
+- **Facturas Exitosas**: Registro detallado de cada factura creada
+- **Errores**:
+  - Códigos de error SAP específicos
+  - Mensajes descriptivos del error
+  - Detalles técnicos para diagnóstico
+- **Estadísticas**:
+  - Total de notas procesadas
+  - Notas ya facturadas
+  - Notas que no cumplen criterios
+  - Errores por tipo
+  - Facturas exitosas por empresa
+- **Generación**: Reportes automáticos al finalizar cada ejecución
+
+## Configuración
+
+### Variables de Entorno
+
+```env
+# URL del servicio SAP B1
+SAP_SL_URL=
+
+# Credenciales de acceso a SAP
+SAP_USERNAME=
+SAP_PASSWORD=
+
+# Bases de datos SAP por empresa
+SAP_DB_AE=    # Base de datos Alianza
+SAP_DB_FG=    # Base de datos FGE
+SAP_DB_FGM=   # Base de datos Manufacturing
+```
+
+### Instalación
+
+```bash
+# Instalar dependencias
+$ npm install
+
+# Configurar variables de entorno
+$ cp .env.example .env
+```
+
+### Ejecución
+
+```bash
+# Modo desarrollo (con hot-reload)
+$ npm run start:dev
+
+# Modo producción
+$ npm run start:prod
+```
+
+## Estructura del Proyecto
+
+```
+src/
+├── config/           # Configuraciones y cron jobs
+│   ├── invoice-cron.module.ts    # Módulo de programación
+│   └── invoice-cron.service.ts   # Servicio de cron
+├── helpers/          # Utilidades y mapeos
+│   └── series-mapping.ts         # Mapeo de series de facturación
+├── reports/          # Sistema de reportes
+│   ├── report.service.ts         # Servicio de reportes
+│   └── report.module.ts          # Módulo de reportes
+├── sap-invoice/      # Módulo principal de facturación
+│   ├── sap-invoice.service.ts    # Lógica principal
+│   ├── sap-invoice.controller.ts # Endpoints API
+│   └── dto/                      # Objetos de transferencia de datos
+└── app.module.ts     # Módulo principal
+```
+
+## Códigos de Error SAP
+
+Sistema de manejo de errores específicos de SAP:
+
+- **-5002**:
+  - Nota ya facturada anteriormente
+  - Cantidad de factura excede la disponible en la nota
+- **-5003**: Error en la validación de datos de la factura
+- **-5004**: Error en el formato de los datos enviados a SAP
+- **-5005**: Error de permisos o autorización en SAP
+- **-5006**: Error de conexión con la base de datos SAP
+- **-5007**: Error en la validación de la serie de facturación
+- **-5008**: Error en la validación del cliente (CardCode)
+- **-5009**: Error en la validación de los artículos
+- **-5010**: Error en la validación de cantidades o precios
+
+Cada error incluye un mensaje descriptivo y detalles técnicos para facilitar el diagnóstico y solución.

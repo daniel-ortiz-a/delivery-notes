@@ -33,6 +33,7 @@ interface SapDeliveryNote {
   Series: number;
   DocCurrency: string;
   DocEntry: number;
+  DocTotal?: number;
   DocumentLines: SapDeliveryNoteLine[];
 }
 
@@ -116,76 +117,97 @@ export class SapInvoiceService {
       }
 
       try {
-        const deliveryNotes = await this.fetchDeliveryNotes(sessionId, company);
-        statsPorEmpresa[company].totalEncontradas = deliveryNotes.length;
-        this.logger.log(
-          `${company}: ${deliveryNotes.length} notas detectadas.`,
-        );
+        let page = 1;
+        let deliveryNotes: SapDeliveryNote[] = [];
+        let totalNotes = 0;
 
-        if (deliveryNotes.length === 0) continue;
-
-        // Filtrar notas según el tipo de facturación
-        const filteredNotes = this.filterDeliveryNotes(deliveryNotes, company);
-        statsPorEmpresa[company].noCumplenCriterios =
-          deliveryNotes.length - filteredNotes.length;
-        this.logger.log(
-          `${company}: ${filteredNotes.length} notas filtradas para facturación.`,
-        );
-
-        if (filteredNotes.length === 0) continue;
-
-        this.logger.log(`Iniciando facturación en ${company}.`);
-
-        for (const deliveryNote of filteredNotes.slice(0, 10)) {
-          this.reportService.incrementProcessed(company);
-
-          // Verificar si la nota ya fue facturada
-          const isAlreadyInvoiced = await this.checkIfAlreadyInvoiced(
-            sessionId,
-            deliveryNote.DocEntry,
+        do {
+          this.logger.log(
+            `Procesando lote ${page} de 10 en la empresa: ${company}`,
           );
-          if (isAlreadyInvoiced) {
+          deliveryNotes = await this.fetchDeliveryNotes(sessionId, company);
+          totalNotes += deliveryNotes.length;
+
+          if (deliveryNotes.length === 0) {
             this.logger.log(
-              `Nota ${deliveryNote.DocEntry} ya fue facturada anteriormente en ${company}`,
+              `No hay más notas de entrega abiertas en ${company} con U_Auto_Auditoria = 'N'.`,
             );
-            statsPorEmpresa[company].yaFacturadas++;
-            this.reportService.addError({
-              timestamp: new Date(),
-              company,
-              docEntry: deliveryNote.DocEntry,
-              errorCode: -5002,
-              errorMessage: 'La nota ya fue facturada anteriormente',
-              details: `DocEntry: ${deliveryNote.DocEntry}, Fecha: ${deliveryNote.DocDate}`,
-            });
+            break;
+          }
+
+          statsPorEmpresa[company].totalEncontradas = totalNotes;
+
+          // Filtrar notas según el tipo de facturación
+          const filteredNotes = this.filterDeliveryNotes(
+            deliveryNotes,
+            company,
+          );
+          statsPorEmpresa[company].noCumplenCriterios +=
+            deliveryNotes.length - filteredNotes.length;
+
+          if (filteredNotes.length === 0) {
+            page++;
             continue;
           }
 
-          const invoiceData = this.buildInvoiceData(company, deliveryNote);
-          const response = await this.createInvoice(sessionId, invoiceData);
+          this.logger.log(
+            `${company}: ${filteredNotes.length} notas filtradas para facturación en el lote ${page}.`,
+          );
 
-          if (response) {
-            this.logger.log(
-              `Factura creada en ${company} - DocEntry: ${response.DocEntry}, Fecha: ${deliveryNote.DocDate}`,
-            );
-            statsPorEmpresa[company].exitosas++;
+          for (const deliveryNote of filteredNotes) {
+            this.reportService.incrementProcessed(company);
 
-            // Registrar la factura exitosa
-            this.reportService.addSuccess({
-              timestamp: new Date(),
-              company,
-              docEntry: response.DocEntry,
-              docDate:
-                deliveryNote.DocDate ?? new Date().toISOString().split('T')[0],
-              cardCode: deliveryNote.CardCode,
-              totalLines: deliveryNote.DocumentLines.length,
-            });
-          } else {
-            this.logger.error(
-              `Error al facturar DocEntry ${deliveryNote.DocEntry} en ${company}`,
+            // Verificar si la nota ya fue facturada
+            const isAlreadyInvoiced = await this.checkIfAlreadyInvoiced(
+              sessionId,
+              deliveryNote.DocEntry,
             );
-            statsPorEmpresa[company].errores++;
+            if (isAlreadyInvoiced) {
+              this.logger.log(
+                `Nota ${deliveryNote.DocEntry} ya fue facturada anteriormente en ${company}`,
+              );
+              statsPorEmpresa[company].yaFacturadas++;
+              this.reportService.addError({
+                timestamp: new Date(),
+                company,
+                docEntry: deliveryNote.DocEntry,
+                errorCode: -5002,
+                errorMessage: 'La nota ya fue facturada anteriormente',
+                details: `DocEntry: ${deliveryNote.DocEntry}, Fecha: ${deliveryNote.DocDate}`,
+              });
+              continue;
+            }
+
+            const invoiceData = this.buildInvoiceData(company, deliveryNote);
+            const response = await this.createInvoice(sessionId, invoiceData);
+
+            if (response) {
+              this.logger.log(
+                `Factura creada en ${company} - DocEntry: ${response.DocEntry}, Fecha: ${deliveryNote.DocDate}`,
+              );
+              statsPorEmpresa[company].exitosas++;
+
+              // Registrar la factura exitosa
+              this.reportService.addSuccess({
+                timestamp: new Date(),
+                company,
+                docEntry: response.DocEntry,
+                docDate:
+                  deliveryNote.DocDate ??
+                  new Date().toISOString().split('T')[0],
+                cardCode: deliveryNote.CardCode,
+                totalLines: deliveryNote.DocumentLines.length,
+              });
+            } else {
+              this.logger.error(
+                `Error al facturar DocEntry ${deliveryNote.DocEntry} en ${company}`,
+              );
+              statsPorEmpresa[company].errores++;
+            }
           }
-        }
+
+          page++;
+        } while (deliveryNotes.length === 10);
       } catch (error) {
         const errorMessage = this.getErrorMessage(error);
         this.logger.error(`Error en ${company}: ${errorMessage}`);
@@ -323,8 +345,9 @@ export class SapInvoiceService {
   ): CreateSapInvoiceDto {
     return {
       CardCode: deliveryNote.CardCode,
-      DocDate: deliveryNote.DocDate ?? new Date().toISOString().split('T')[0],
+      DocDate: new Date().toISOString().split('T')[0],
       Comments: deliveryNote.Comments ?? '',
+      DocTotal: deliveryNote.DocTotal ?? 0,
       Series:
         getInvoiceSeries(company, deliveryNote.Series) || deliveryNote.Series,
       DocCurrency: deliveryNote.DocCurrency,
