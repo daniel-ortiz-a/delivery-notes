@@ -407,12 +407,39 @@ export class SapInvoiceService {
       if (axiosError.response?.data) {
         const { code, message } = axiosError.response.data;
 
-        // Manejo específico para el error de documento ya cerrado
-        if (code === -5002 && message?.value?.includes('already been closed')) {
-          return 'La nota ya fue facturada anteriormente';
+        // Mapeo de códigos de error específicos de SAP
+        switch (code) {
+          case -5002:
+            if (message?.value?.includes('already been closed')) {
+              return 'La nota ya fue facturada anteriormente';
+            }
+            if (message?.value?.includes('exceeds the quantity')) {
+              return 'La cantidad de la factura excede la cantidad disponible en la nota de entrega';
+            }
+            break;
+          case -5003:
+            return 'Error de validación en los datos de la factura';
+          case -5004:
+            return 'Error en el formato de los datos enviados';
+          case -5005:
+            return 'Error de permisos o autorización en SAP';
+          case -5006:
+            return 'Error de conexión con la base de datos de SAP';
+          case -5007:
+            return 'Error en la validación de la serie de facturación';
+          case -5008:
+            return 'Error en la validación del cliente (CardCode)';
+          case -5009:
+            return 'Error en la validación de los artículos';
+          case -5010:
+            return 'Error en la validación de cantidades o precios';
+          default:
+            if (message?.value) {
+              return `Error ${code}: ${message.value}`;
+            }
         }
 
-        return `Error ${code}: ${message?.value || 'No hay mensaje de error'}`;
+        return `Error ${code}: ${message?.value || 'No hay mensaje de error específico'}`;
       }
 
       return `HTTP ${axiosError.response?.status ?? 'unknown'}: ${JSON.stringify(axiosError.response?.data ?? 'No data')}`;
