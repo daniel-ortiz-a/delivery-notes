@@ -34,6 +34,8 @@ interface SapDeliveryNote {
   DocCurrency: string;
   DocEntry: number;
   DocumentLines: SapDeliveryNoteLine[];
+  DocumentStatus: string;
+  U_Auto_Auditoria: string;
 }
 
 interface SapDeliveryNoteLine {
@@ -161,7 +163,12 @@ export class SapInvoiceService {
           }
 
           const invoiceData = this.buildInvoiceData(company, deliveryNote);
-          const response = await this.createInvoice(sessionId, invoiceData);
+          const response = await this.createInvoice(
+            sessionId,
+            invoiceData,
+            company,
+            deliveryNote.DocEntry,
+          );
 
           if (response) {
             this.logger.log(
@@ -252,10 +259,61 @@ export class SapInvoiceService {
         const hoursDiff =
           (today.getTime() - noteDate.getTime()) / (1000 * 60 * 60);
 
+        if (hoursDiff < 72) {
+          // Registrar en el reporte que la nota no se facturó por no cumplir las 72 horas
+          this.reportService.addError({
+            timestamp: new Date(),
+            company,
+            docEntry: note.DocEntry,
+            errorCode: -5001,
+            errorMessage: 'Nota de público general pendiente de 72 horas',
+            details: `DocEntry: ${note.DocEntry}, Fecha: ${note.DocDate}, Horas transcurridas: ${Math.round(hoursDiff)}, Horas restantes: ${Math.round(72 - hoursDiff)}`,
+          });
+        }
+
         return hoursDiff >= 72;
       }
 
-      return true; // Si no es público general, incluir la nota
+      // Verificar si la nota tiene fecha válida
+      if (!note.DocDate) {
+        this.reportService.addError({
+          timestamp: new Date(),
+          company,
+          docEntry: note.DocEntry,
+          errorCode: -5002,
+          errorMessage: 'Nota sin fecha de documento',
+          details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}`,
+        });
+        return false;
+      }
+
+      // Verificar si la nota tiene líneas
+      if (!note.DocumentLines || note.DocumentLines.length === 0) {
+        this.reportService.addError({
+          timestamp: new Date(),
+          company,
+          docEntry: note.DocEntry,
+          errorCode: -5003,
+          errorMessage: 'Nota sin líneas de documento',
+          details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}`,
+        });
+        return false;
+      }
+
+      // Verificar si la nota tiene moneda válida
+      if (!note.DocCurrency) {
+        this.reportService.addError({
+          timestamp: new Date(),
+          company,
+          docEntry: note.DocEntry,
+          errorCode: -5004,
+          errorMessage: 'Nota sin moneda definida',
+          details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}`,
+        });
+        return false;
+      }
+
+      return true; // Si no es público general y cumple todas las validaciones, incluir la nota
     });
   }
 
@@ -276,11 +334,60 @@ export class SapInvoiceService {
           },
         ),
       );
-      return response.data?.value || [];
+
+      const notes = response.data?.value || [];
+
+      // Registrar notas que no cumplen con los criterios
+      notes.forEach((note) => {
+        if (note.DocumentStatus !== 'bost_Open') {
+          this.reportService.addError({
+            timestamp: new Date(),
+            company,
+            docEntry: note.DocEntry,
+            errorCode: -5005,
+            errorMessage: 'Nota no está en estado abierto',
+            details: `DocEntry: ${note.DocEntry}, Estado: ${note.DocumentStatus}, Fecha: ${note.DocDate}`,
+          });
+        }
+
+        if (note.U_Auto_Auditoria === 'Y') {
+          this.reportService.addError({
+            timestamp: new Date(),
+            company,
+            docEntry: note.DocEntry,
+            errorCode: -5006,
+            errorMessage: 'Nota ya ha sido auditada',
+            details: `DocEntry: ${note.DocEntry}, Fecha: ${note.DocDate}`,
+          });
+        }
+
+        const noteDate = new Date(note.DocDate || '');
+        const today = new Date();
+        if (noteDate >= today) {
+          this.reportService.addError({
+            timestamp: new Date(),
+            company,
+            docEntry: note.DocEntry,
+            errorCode: -5007,
+            errorMessage: 'Nota con fecha futura o actual',
+            details: `DocEntry: ${note.DocEntry}, Fecha: ${note.DocDate}`,
+          });
+        }
+      });
+
+      return notes;
     } catch (error) {
       this.logger.error(
         `Error obteniendo notas de entrega en ${company}: ${this.getErrorMessage(error)}`,
       );
+      // Registrar error de conexión
+      this.reportService.addError({
+        timestamp: new Date(),
+        company,
+        errorCode: -5008,
+        errorMessage: 'Error al obtener notas de entrega',
+        details: this.getErrorMessage(error),
+      });
       return [];
     }
   }
@@ -288,6 +395,8 @@ export class SapInvoiceService {
   private async createInvoice(
     sessionId: string,
     invoiceData: CreateSapInvoiceDto,
+    company: string,
+    docEntry: number,
   ): Promise<SapInvoiceResponse | null> {
     try {
       const response = await firstValueFrom(
@@ -302,9 +411,19 @@ export class SapInvoiceService {
       );
       return response.data;
     } catch (error) {
-      this.logger.error(
-        `Error al crear factura: ${this.getErrorMessage(error)}`,
-      );
+      const errorMessage = this.getErrorMessage(error);
+      this.logger.error(`Error al crear factura: ${errorMessage}`);
+
+      // Registrar el error en el reporte
+      this.reportService.addError({
+        timestamp: new Date(),
+        company,
+        docEntry,
+        errorCode: -5009,
+        errorMessage: 'Error al crear factura en SAP',
+        details: `DocEntry: ${docEntry}, Error: ${errorMessage}`,
+      });
+
       return null;
     }
   }
