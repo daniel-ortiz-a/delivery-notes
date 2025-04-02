@@ -1,5 +1,9 @@
 FROM node:22.14-alpine
 
+# Configurar zona horaria para Ciudad de México
+RUN apk add --no-cache tzdata
+ENV TZ=America/Mexico_City
+
 WORKDIR /app
 
 COPY package.json .
