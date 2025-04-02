@@ -414,14 +414,28 @@ export class SapInvoiceService {
       const errorMessage = this.getErrorMessage(error);
       this.logger.error(`Error al crear factura: ${errorMessage}`);
 
-      // Registrar el error en el reporte
+      // Obtener el error específico de SAP
+      const axiosError = error as AxiosErrorResponse;
+      const sapError = axiosError.response?.data;
+
+      // Mejorar la captura del mensaje de error de SAP
+      let sapErrorMessage = 'No hay mensaje de error específico de SAP';
+      if (sapError?.message?.value) {
+        sapErrorMessage = sapError.message.value;
+      } else if (sapError?.code) {
+        sapErrorMessage = `Error SAP ${sapError.code}`;
+      } else if (axiosError.response?.status) {
+        sapErrorMessage = `Error HTTP ${axiosError.response.status}`;
+      }
+
+      // Registrar el error en el reporte con el mensaje específico de SAP
       this.reportService.addError({
         timestamp: new Date(),
         company,
         docEntry,
         errorCode: -5009,
         errorMessage: 'Error al crear factura en SAP',
-        details: `DocEntry: ${docEntry}, Error: ${errorMessage}`,
+        details: `DocEntry: ${docEntry}, Error: ${errorMessage}, Error SAP: ${sapErrorMessage}, Response: ${JSON.stringify(sapError)}`,
       });
 
       return null;
