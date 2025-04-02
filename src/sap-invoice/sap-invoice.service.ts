@@ -35,6 +35,8 @@ interface SapDeliveryNote {
   DocEntry: number;
   DocTotal?: number;
   DocumentLines: SapDeliveryNoteLine[];
+  DocumentStatus: string;
+  U_Auto_Auditoria: string;
 }
 
 interface SapDeliveryNoteLine {
@@ -180,7 +182,12 @@ export class SapInvoiceService {
             }
 
             const invoiceData = this.buildInvoiceData(company, deliveryNote);
-            const result = await this.createInvoice(sessionId, invoiceData);
+            const response = await this.createInvoice(
+              sessionId,
+              invoiceData,
+              company,
+              deliveryNote.DocEntry,
+            );
 
             if (result.success) {
               this.logger.log(
@@ -287,20 +294,60 @@ export class SapInvoiceService {
           (today.getTime() - noteDate.getTime()) / (1000 * 60 * 60);
 
         if (hoursDiff < 72) {
-          // Registrar la nota que no cumple con el criterio de 72 horas
+          // Registrar en el reporte que la nota no se facturó por no cumplir las 72 horas
           this.reportService.addError({
             timestamp: new Date(),
             company,
             docEntry: note.DocEntry,
             errorCode: -5001,
-            errorMessage: 'Nota no cumple con el criterio de 72 horas',
-            details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}, Fecha Nota: ${note.DocDate}, Horas transcurridas: ${Math.round(hoursDiff)}`,
+            errorMessage: 'Nota de público general pendiente de 72 horas',
+            details: `DocEntry: ${note.DocEntry}, Fecha: ${note.DocDate}, Horas transcurridas: ${Math.round(hoursDiff)}, Horas restantes: ${Math.round(72 - hoursDiff)}`,
           });
-          return false;
         }
+
+        return hoursDiff >= 72;
       }
 
-      return true; // Si no es público general, incluir la nota
+      // Verificar si la nota tiene fecha válida
+      if (!note.DocDate) {
+        this.reportService.addError({
+          timestamp: new Date(),
+          company,
+          docEntry: note.DocEntry,
+          errorCode: -5002,
+          errorMessage: 'Nota sin fecha de documento',
+          details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}`,
+        });
+        return false;
+      }
+
+      // Verificar si la nota tiene líneas
+      if (!note.DocumentLines || note.DocumentLines.length === 0) {
+        this.reportService.addError({
+          timestamp: new Date(),
+          company,
+          docEntry: note.DocEntry,
+          errorCode: -5003,
+          errorMessage: 'Nota sin líneas de documento',
+          details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}`,
+        });
+        return false;
+      }
+
+      // Verificar si la nota tiene moneda válida
+      if (!note.DocCurrency) {
+        this.reportService.addError({
+          timestamp: new Date(),
+          company,
+          docEntry: note.DocEntry,
+          errorCode: -5004,
+          errorMessage: 'Nota sin moneda definida',
+          details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}`,
+        });
+        return false;
+      }
+
+      return true; // Si no es público general y cumple todas las validaciones, incluir la nota
     });
   }
 
@@ -321,11 +368,60 @@ export class SapInvoiceService {
           },
         ),
       );
-      return response.data?.value || [];
+
+      const notes = response.data?.value || [];
+
+      // Registrar notas que no cumplen con los criterios
+      notes.forEach((note) => {
+        if (note.DocumentStatus !== 'bost_Open') {
+          this.reportService.addError({
+            timestamp: new Date(),
+            company,
+            docEntry: note.DocEntry,
+            errorCode: -5005,
+            errorMessage: 'Nota no está en estado abierto',
+            details: `DocEntry: ${note.DocEntry}, Estado: ${note.DocumentStatus}, Fecha: ${note.DocDate}`,
+          });
+        }
+
+        if (note.U_Auto_Auditoria === 'Y') {
+          this.reportService.addError({
+            timestamp: new Date(),
+            company,
+            docEntry: note.DocEntry,
+            errorCode: -5006,
+            errorMessage: 'Nota ya ha sido auditada',
+            details: `DocEntry: ${note.DocEntry}, Fecha: ${note.DocDate}`,
+          });
+        }
+
+        const noteDate = new Date(note.DocDate || '');
+        const today = new Date();
+        if (noteDate >= today) {
+          this.reportService.addError({
+            timestamp: new Date(),
+            company,
+            docEntry: note.DocEntry,
+            errorCode: -5007,
+            errorMessage: 'Nota con fecha futura o actual',
+            details: `DocEntry: ${note.DocEntry}, Fecha: ${note.DocDate}`,
+          });
+        }
+      });
+
+      return notes;
     } catch (error) {
       this.logger.error(
         `Error obteniendo notas de entrega en ${company}: ${this.getErrorMessage(error).message}`,
       );
+      // Registrar error de conexión
+      this.reportService.addError({
+        timestamp: new Date(),
+        company,
+        errorCode: -5008,
+        errorMessage: 'Error al obtener notas de entrega',
+        details: this.getErrorMessage(error),
+      });
       return [];
     }
   }
@@ -333,7 +429,9 @@ export class SapInvoiceService {
   private async createInvoice(
     sessionId: string,
     invoiceData: CreateSapInvoiceDto,
-  ): Promise<{ success: SapInvoiceResponse | null; error?: unknown }> {
+    company: string,
+    docEntry: number,
+  ): Promise<SapInvoiceResponse | null> {
     try {
       const response = await firstValueFrom(
         this.httpService.post<SapInvoiceResponse>(
@@ -347,10 +445,34 @@ export class SapInvoiceService {
       );
       return { success: response.data };
     } catch (error) {
-      this.logger.error(
-        `Error al crear factura: ${this.getErrorMessage(error).message}`,
-      );
-      return { success: null, error };
+      const errorMessage = this.getErrorMessage(error);
+      this.logger.error(`Error al crear factura: ${errorMessage}`);
+
+      // Obtener el error específico de SAP
+      const axiosError = error as AxiosErrorResponse;
+      const sapError = axiosError.response?.data;
+
+      // Mejorar la captura del mensaje de error de SAP
+      let sapErrorMessage = 'No hay mensaje de error específico de SAP';
+      if (sapError?.message?.value) {
+        sapErrorMessage = sapError.message.value;
+      } else if (sapError?.code) {
+        sapErrorMessage = `Error SAP ${sapError.code}`;
+      } else if (axiosError.response?.status) {
+        sapErrorMessage = `Error HTTP ${axiosError.response.status}`;
+      }
+
+      // Registrar el error en el reporte con el mensaje específico de SAP
+      this.reportService.addError({
+        timestamp: new Date(),
+        company,
+        docEntry,
+        errorCode: -5009,
+        errorMessage: 'Error al crear factura en SAP',
+        details: `DocEntry: ${docEntry}, Error: ${errorMessage}, Error SAP: ${sapErrorMessage}, Response: ${JSON.stringify(sapError)}`,
+      });
+
+      return null;
     }
   }
 

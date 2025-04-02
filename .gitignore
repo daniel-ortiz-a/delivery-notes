@@ -54,9 +54,13 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
 # Ignore generated reports
 src/reports/generated/*
 src/reports/generated/*.txt
+
+# Keep the directory but ignore its contents
+!src/reports/generated/.gitkeep
 
 # Keep the directory but ignore its contents
 !src/reports/generated/.gitkeep
