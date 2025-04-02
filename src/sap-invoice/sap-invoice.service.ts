@@ -33,7 +33,6 @@ interface SapDeliveryNote {
   Series: number;
   DocCurrency: string;
   DocEntry: number;
-  DocTotal?: number;
   DocumentLines: SapDeliveryNoteLine[];
   DocumentStatus: string;
   U_Auto_Auditoria: string;
@@ -119,116 +118,84 @@ export class SapInvoiceService {
       }
 
       try {
-        let page = 1;
-        let deliveryNotes: SapDeliveryNote[] = [];
-        let totalNotes = 0;
+        const deliveryNotes = await this.fetchDeliveryNotes(sessionId, company);
+        statsPorEmpresa[company].totalEncontradas = deliveryNotes.length;
+        this.logger.log(
+          `${company}: ${deliveryNotes.length} notas detectadas.`,
+        );
 
-        do {
-          this.logger.log(
-            `Procesando lote ${page} de 10 en la empresa: ${company}`,
+        if (deliveryNotes.length === 0) continue;
+
+        // Filtrar notas según el tipo de facturación
+        const filteredNotes = this.filterDeliveryNotes(deliveryNotes, company);
+        statsPorEmpresa[company].noCumplenCriterios =
+          deliveryNotes.length - filteredNotes.length;
+        this.logger.log(
+          `${company}: ${filteredNotes.length} notas filtradas para facturación.`,
+        );
+
+        if (filteredNotes.length === 0) continue;
+
+        this.logger.log(`Iniciando facturación en ${company}.`);
+
+        for (const deliveryNote of filteredNotes.slice(0, 10)) {
+          this.reportService.incrementProcessed(company);
+
+          // Verificar si la nota ya fue facturada
+          const isAlreadyInvoiced = await this.checkIfAlreadyInvoiced(
+            sessionId,
+            deliveryNote.DocEntry,
           );
-          deliveryNotes = await this.fetchDeliveryNotes(sessionId, company);
-          totalNotes += deliveryNotes.length;
-
-          if (deliveryNotes.length === 0) {
+          if (isAlreadyInvoiced) {
             this.logger.log(
-              `No hay más notas de entrega abiertas en ${company} con U_Auto_Auditoria = 'N'.`,
+              `Nota ${deliveryNote.DocEntry} ya fue facturada anteriormente en ${company}`,
             );
-            break;
-          }
-
-          statsPorEmpresa[company].totalEncontradas = totalNotes;
-
-          // Filtrar notas según el tipo de facturación
-          const filteredNotes = this.filterDeliveryNotes(
-            deliveryNotes,
-            company,
-          );
-          statsPorEmpresa[company].noCumplenCriterios +=
-            deliveryNotes.length - filteredNotes.length;
-
-          if (filteredNotes.length === 0) {
-            page++;
+            statsPorEmpresa[company].yaFacturadas++;
+            this.reportService.addError({
+              timestamp: new Date(),
+              company,
+              docEntry: deliveryNote.DocEntry,
+              errorCode: -5002,
+              errorMessage: 'La nota ya fue facturada anteriormente',
+              details: `DocEntry: ${deliveryNote.DocEntry}, Fecha: ${deliveryNote.DocDate}`,
+            });
             continue;
           }
 
-          this.logger.log(
-            `${company}: ${filteredNotes.length} notas filtradas para facturación en el lote ${page}.`,
+          const invoiceData = this.buildInvoiceData(company, deliveryNote);
+          const response = await this.createInvoice(
+            sessionId,
+            invoiceData,
+            company,
+            deliveryNote.DocEntry,
           );
 
-          for (const deliveryNote of filteredNotes) {
-            this.reportService.incrementProcessed(company);
-
-            // Verificar si la nota ya fue facturada
-            const isAlreadyInvoiced = await this.checkIfAlreadyInvoiced(
-              sessionId,
-              deliveryNote.DocEntry,
+          if (response) {
+            this.logger.log(
+              `Factura creada en ${company} - DocEntry: ${response.DocEntry}, Fecha: ${deliveryNote.DocDate}`,
             );
-            if (isAlreadyInvoiced) {
-              this.logger.log(
-                `Nota ${deliveryNote.DocEntry} ya fue facturada anteriormente en ${company}`,
-              );
-              statsPorEmpresa[company].yaFacturadas++;
-              this.reportService.addError({
-                timestamp: new Date(),
-                company,
-                docEntry: deliveryNote.DocEntry,
-                errorCode: -5002,
-                errorMessage: 'La nota ya fue facturada anteriormente',
-                sapErrorMessage: 'Document has already been closed',
-                details: `DocEntry: ${deliveryNote.DocEntry}, CardCode: ${deliveryNote.CardCode}, Fecha: ${deliveryNote.DocDate}`,
-              });
-              continue;
-            }
+            statsPorEmpresa[company].exitosas++;
 
-            const invoiceData = this.buildInvoiceData(company, deliveryNote);
-            const response = await this.createInvoice(
-              sessionId,
-              invoiceData,
+            // Registrar la factura exitosa
+            this.reportService.addSuccess({
+              timestamp: new Date(),
               company,
-              deliveryNote.DocEntry,
+              docEntry: response.DocEntry,
+              docDate:
+                deliveryNote.DocDate ?? new Date().toISOString().split('T')[0],
+              cardCode: deliveryNote.CardCode,
+              totalLines: deliveryNote.DocumentLines.length,
+            });
+          } else {
+            this.logger.error(
+              `Error al facturar DocEntry ${deliveryNote.DocEntry} en ${company}`,
             );
-
-            if (result.success) {
-              this.logger.log(
-                `Factura creada en ${company} - DocEntry: ${result.success.DocEntry}, Fecha: ${deliveryNote.DocDate}`,
-              );
-              statsPorEmpresa[company].exitosas++;
-
-              // Registrar la factura exitosa
-              this.reportService.addSuccess({
-                timestamp: new Date(),
-                company,
-                docEntry: result.success.DocEntry,
-                docDate:
-                  deliveryNote.DocDate ??
-                  new Date().toISOString().split('T')[0],
-                cardCode: deliveryNote.CardCode,
-                totalLines: deliveryNote.DocumentLines.length,
-              });
-            } else {
-              this.logger.error(
-                `Error al facturar DocEntry ${deliveryNote.DocEntry} en ${company}`,
-              );
-              statsPorEmpresa[company].errores++;
-              const errorInfo = this.getErrorMessage(result.error);
-              this.reportService.addError({
-                timestamp: new Date(),
-                company,
-                docEntry: deliveryNote.DocEntry,
-                errorCode: -5000,
-                errorMessage: errorInfo.message,
-                sapErrorMessage: errorInfo.sapMessage,
-                details: `DocEntry: ${deliveryNote.DocEntry}, CardCode: ${deliveryNote.CardCode}, Fecha: ${deliveryNote.DocDate}`,
-              });
-            }
+            statsPorEmpresa[company].errores++;
           }
-
-          page++;
-        } while (deliveryNotes.length === 10);
-      } catch (error: unknown) {
-        const errorInfo = this.getErrorMessage(error);
-        this.logger.error(`Error en ${company}: ${errorInfo.message}`);
+        }
+      } catch (error) {
+        const errorMessage = this.getErrorMessage(error);
+        this.logger.error(`Error en ${company}: ${errorMessage}`);
         statsPorEmpresa[company].errores++;
 
         // Registrar el error en el reporte
@@ -237,8 +204,7 @@ export class SapInvoiceService {
           timestamp: new Date(),
           company,
           errorCode: axiosError.response?.data?.code ?? -1,
-          errorMessage: errorInfo.message,
-          sapErrorMessage: errorInfo.sapMessage,
+          errorMessage,
           details: JSON.stringify(error),
         });
       } finally {
@@ -412,7 +378,7 @@ export class SapInvoiceService {
       return notes;
     } catch (error) {
       this.logger.error(
-        `Error obteniendo notas de entrega en ${company}: ${this.getErrorMessage(error).message}`,
+        `Error obteniendo notas de entrega en ${company}: ${this.getErrorMessage(error)}`,
       );
       // Registrar error de conexión
       this.reportService.addError({
@@ -443,7 +409,7 @@ export class SapInvoiceService {
           },
         ),
       );
-      return { success: response.data };
+      return response.data;
     } catch (error) {
       const errorMessage = this.getErrorMessage(error);
       this.logger.error(`Error al crear factura: ${errorMessage}`);
@@ -490,9 +456,8 @@ export class SapInvoiceService {
   ): CreateSapInvoiceDto {
     return {
       CardCode: deliveryNote.CardCode,
-      DocDate: new Date().toISOString().split('T')[0],
+      DocDate: deliveryNote.DocDate ?? new Date().toISOString().split('T')[0],
       Comments: deliveryNote.Comments ?? '',
-      DocTotal: deliveryNote.DocTotal ?? 0,
       Series:
         getInvoiceSeries(company, deliveryNote.Series) || deliveryNote.Series,
       DocCurrency: deliveryNote.DocCurrency,
@@ -562,101 +527,61 @@ export class SapInvoiceService {
       return response.data?.value?.length > 0;
     } catch (error) {
       this.logger.error(
-        `Error verificando si la nota ${docEntry} ya fue facturada: ${this.getErrorMessage(error).message}`,
+        `Error verificando si la nota ${docEntry} ya fue facturada: ${this.getErrorMessage(error)}`,
       );
       return false;
     }
   }
 
-  private getErrorMessage(error: unknown): {
-    message: string;
-    sapMessage?: string;
-  } {
+  private getErrorMessage(error: unknown): string {
     if (typeof error === 'object' && error !== null) {
       const axiosError = error as AxiosErrorResponse;
 
       if (axiosError.response?.data) {
         const { code, message } = axiosError.response.data;
-        const sapMessage = message?.value;
 
         // Mapeo de códigos de error específicos de SAP
         switch (code) {
           case -5002:
-            if (sapMessage?.includes('already been closed')) {
-              return {
-                message: 'La nota ya fue facturada anteriormente',
-                sapMessage,
-              };
+            if (message?.value?.includes('already been closed')) {
+              return 'La nota ya fue facturada anteriormente';
             }
-            if (sapMessage?.includes('exceeds the quantity')) {
-              return {
-                message:
-                  'La cantidad de la factura excede la cantidad disponible en la nota de entrega',
-                sapMessage,
-              };
+            if (message?.value?.includes('exceeds the quantity')) {
+              return 'La cantidad de la factura excede la cantidad disponible en la nota de entrega';
             }
             break;
           case -5003:
-            return {
-              message: 'Error de validación en los datos de la factura',
-              sapMessage,
-            };
+            return 'Error de validación en los datos de la factura';
           case -5004:
-            return {
-              message: 'Error en el formato de los datos enviados',
-              sapMessage,
-            };
+            return 'Error en el formato de los datos enviados';
           case -5005:
-            return {
-              message: 'Error de permisos o autorización en SAP',
-              sapMessage,
-            };
+            return 'Error de permisos o autorización en SAP';
           case -5006:
-            return {
-              message: 'Error de conexión con la base de datos de SAP',
-              sapMessage,
-            };
+            return 'Error de conexión con la base de datos de SAP';
           case -5007:
-            return {
-              message: 'Error en la validación de la serie de facturación',
-              sapMessage,
-            };
+            return 'Error en la validación de la serie de facturación';
           case -5008:
-            return {
-              message: 'Error en la validación del cliente (CardCode)',
-              sapMessage,
-            };
+            return 'Error en la validación del cliente (CardCode)';
           case -5009:
-            return {
-              message: 'Error en la validación de los artículos',
-              sapMessage,
-            };
+            return 'Error en la validación de los artículos';
           case -5010:
-            return {
-              message: 'Error en la validación de cantidades o precios',
-              sapMessage,
-            };
+            return 'Error en la validación de cantidades o precios';
           default:
-            if (sapMessage) {
-              return { message: `Error ${code}: ${sapMessage}`, sapMessage };
+            if (message?.value) {
+              return `Error ${code}: ${message.value}`;
             }
         }
 
-        return {
-          message: `Error ${code}: ${sapMessage || 'No hay mensaje de error específico'}`,
-          sapMessage,
-        };
+        return `Error ${code}: ${message?.value || 'No hay mensaje de error específico'}`;
       }
 
-      return {
-        message: `HTTP ${axiosError.response?.status ?? 'unknown'}: ${JSON.stringify(axiosError.response?.data ?? 'No data')}`,
-      };
+      return `HTTP ${axiosError.response?.status ?? 'unknown'}: ${JSON.stringify(axiosError.response?.data ?? 'No data')}`;
     }
 
     if (error instanceof Error) {
-      return { message: error.message };
+      return error.message;
     }
 
-    return { message: 'Error desconocido' };
+    return 'Error desconocido';
   }
 }
