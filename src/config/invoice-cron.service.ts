@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { SapInvoiceService } from '../sap-invoice/sap-invoice.service';
 
 /**
@@ -15,9 +15,7 @@ import { SapInvoiceService } from '../sap-invoice/sap-invoice.service';
 export class InvoiceCronService {
   private readonly logger = new Logger(InvoiceCronService.name);
 
-  constructor(private readonly sapInvoiceService: SapInvoiceService) {
-    this.startCountdown();
-  }
+  constructor(private readonly sapInvoiceService: SapInvoiceService) {}
 
   // Lunes a Viernes de 18:40 a 23:30 cada 10 minutos
   @Cron('0 40-50,0-30 18-23 * * 1-5', { timeZone: 'America/Mexico_City' })
@@ -195,35 +193,5 @@ export class InvoiceCronService {
     }
 
     return next;
-  }
-
-  private startCountdown() {
-    setInterval(() => {
-      const now = new Date();
-      const nextExecution = this.getNextExecutionTime(now);
-      const timeRemaining = nextExecution.getTime() - now.getTime();
-      const isLastDay = this.isLastDayOfMonth(now);
-
-      if (timeRemaining > 0) {
-        const days = Math.floor(timeRemaining / (1000 * 60 * 60 * 24));
-        const hours = Math.floor(
-          (timeRemaining % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60),
-        );
-        const minutes = Math.floor(
-          (timeRemaining % (1000 * 60 * 60)) / (1000 * 60),
-        );
-        const seconds = Math.floor((timeRemaining % (1000 * 60)) / 1000);
-
-        if (isLastDay) {
-          process.stdout.write(
-            `\r[FIN DE MES] Siguiente ejecución en: ${days}d ${hours}h ${minutes}m ${seconds}s   `,
-          );
-        } else {
-          process.stdout.write(
-            `\rSiguiente ejecución en: ${days}d ${hours}h ${minutes}m ${seconds}s   `,
-          );
-        }
-      }
-    }, 1000);
   }
 }

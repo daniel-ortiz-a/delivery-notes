@@ -133,6 +133,7 @@ Sistema de facturación automática que integra notas de entrega con SAP B1, des
    - **Estado de Nota**: Solo procesa notas con estado 'bost_Open' (abiertas)
    - **Auditoría**: Excluye notas marcadas para auditoría (U_Auto_Auditoria = 'N')
    - **Fecha**: Procesa notas con fecha anterior a la actual para evitar facturas futuras
+   - **Tipo de Cambio**: Filtra las Notas de Entrega que tengan dos tipos de cambio diferentes
 
 ### Programación
 
@@ -232,5 +233,6 @@ Sistema de manejo de errores específicos de SAP:
 - **-5008**: Error en la validación del cliente (CardCode)
 - **-5009**: Error en la validación de los artículos
 - **-5010**: Error en la validación de cantidades o precios
+- **-5011**: Nota con múltiples tipos de cambio
 
 Cada error incluye un mensaje descriptivo y detalles técnicos para facilitar el diagnóstico y solución.

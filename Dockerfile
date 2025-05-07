@@ -4,9 +4,12 @@ FROM node:22.14-alpine
 RUN apk add --no-cache tzdata
 ENV TZ=America/Mexico_City
 
+# Configurar variable de entorno para controlar reportes en producción
+ENV GENERATE_REPORTS=false
+
 WORKDIR /app
 
-COPY package.json .
+COPY package*.json ./
 
 RUN npm install
 
@@ -16,5 +19,6 @@ RUN npm run build
 
 EXPOSE 3000
 
-CMD ["npm", "run", "start"]
+# Usar el comando de producción y agregar manejo de señales
+CMD ["npm", "run", "start:prod"]
 
