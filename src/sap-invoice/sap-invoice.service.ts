@@ -44,6 +44,7 @@ interface SapDeliveryNoteLine {
   Price: number;
   WarehouseCode?: string;
   LineNum: number;
+  Rate?: number;
 }
 
 interface SapInvoiceResponse {
@@ -309,6 +310,22 @@ export class SapInvoiceService {
           errorCode: -5004,
           errorMessage: 'Nota sin moneda definida',
           details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}`,
+        });
+        return false;
+      }
+
+      // Verificar si hay múltiples tipos de cambio en las líneas del documento
+      const tiposDeCambio = new Set(
+        note.DocumentLines.map((line) => line.Rate),
+      );
+      if (tiposDeCambio.size > 1) {
+        this.reportService.addError({
+          timestamp: new Date(),
+          company,
+          docEntry: note.DocEntry,
+          errorCode: -5011,
+          errorMessage: 'Nota con múltiples tipos de cambio',
+          details: `DocEntry: ${note.DocEntry}, CardCode: ${note.CardCode}, Tipos de cambio encontrados: ${Array.from(tiposDeCambio).join(', ')}`,
         });
         return false;
       }

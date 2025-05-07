@@ -35,11 +35,13 @@ export class ReportService {
   private readonly logger = new Logger(ReportService.name);
   private readonly reportsDir: string;
   private currentReport: ReportData;
+  private readonly generateReports: boolean;
 
   constructor() {
     this.reportsDir = path.join(process.cwd(), 'src', 'reports', 'generated');
     this.ensureDirectoryExists();
     this.currentReport = this.initializeReport();
+    this.generateReports = process.env.GENERATE_REPORTS === 'true';
   }
 
   private initializeReport(): ReportData {
@@ -69,6 +71,11 @@ export class ReportService {
   }
 
   async generateReport(): Promise<string> {
+    if (!this.generateReports) {
+      this.logger.log('Generación de reportes desactivada en producción');
+      return 'Generación de reportes desactivada en producción';
+    }
+
     const endTime = new Date();
     const duration = endTime.getTime() - this.currentReport.startTime.getTime();
     const durationMinutes = Math.floor(duration / (1000 * 60));
@@ -142,6 +149,7 @@ export class ReportService {
       '-5008': 'Error en la validación del cliente (CardCode)',
       '-5009': 'Error en la validación de los artículos',
       '-5010': 'Error en la validación de cantidades o precios',
+      '-5011': 'Nota con múltiples tipos de cambio',
     };
 
     for (const [errorCode, errorDescription] of Object.entries(errorTypes)) {
