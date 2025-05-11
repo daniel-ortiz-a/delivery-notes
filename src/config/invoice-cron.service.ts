@@ -59,7 +59,7 @@ export class InvoiceCronService {
   }
 
   // Fin de mes - días 28-31 de cada mes
-  @Cron('0 0,10,20,30,40,50 18-23 28-31 * *', {
+  @Cron('0 40,50 6-11 28-31 * *', {
     timeZone: 'America/Mexico_City',
   })
   async facturaFinDeMes() {
@@ -68,11 +68,11 @@ export class InvoiceCronService {
     const currentMinute = now.getMinutes();
     const currentDay = now.getDate();
 
-    // Solo ejecutar en los minutos 0, 10, 20, 30, 40, 50
-    if (![0, 10, 20, 30, 40, 50].includes(currentMinute)) return;
+    // Solo ejecutar en los minutos 40 y 50
+    if (currentMinute !== 40 && currentMinute !== 50) return;
 
-    // No ejecutar después de las 23:30
-    if (currentHour === 23 && currentMinute > 30) return;
+    // No ejecutar después de las 11:30
+    if (currentHour === 11 && currentMinute > 30) return;
 
     // Verificar si es el último día del mes
     const lastDayOfMonth = new Date(
