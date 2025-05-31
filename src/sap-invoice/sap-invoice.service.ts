@@ -5,6 +5,7 @@ import * as https from 'https';
 import { firstValueFrom } from 'rxjs';
 import { getInvoiceSeries } from '../helpers/series-mapping';
 import { CreateSapInvoiceDto } from './dto/create-sap-invoice.dto';
+import { DeliveryNoteErrorDto } from './dto/delivery-note-error.dto';
 
 interface SapLoginResponse {
   SessionId: string;
@@ -254,15 +255,17 @@ export class SapInvoiceService {
         return false;
       }
 
-      // Verificar si hay múltiples tipos de cambio en las líneas del documento
-      const tiposDeCambio = new Set(
-        note.DocumentLines.map((line) => line.Rate),
-      );
-      if (tiposDeCambio.size > 1) {
-        this.logger.error(
-          `❌ Nota ${note.DocEntry} con múltiples tipos de cambio - CardCode: ${note.CardCode}, Tipos de cambio encontrados: ${Array.from(tiposDeCambio).join(', ')}`,
+      // Verificar tipos de cambio solo para Alianza y Manufacturing
+      if (company === 'SBO_Alianza' || company === 'SBO_MANUFACTURING') {
+        const tiposDeCambio = new Set(
+          note.DocumentLines.map((line) => line.Rate),
         );
-        return false;
+        if (tiposDeCambio.size > 1) {
+          this.logger.error(
+            `❌ Nota ${note.DocEntry} con múltiples tipos de cambio - CardCode: ${note.CardCode}, Tipos de cambio encontrados: ${Array.from(tiposDeCambio).join(', ')}`,
+          );
+          return false;
+        }
       }
 
       return true; // Si no es público general y cumple todas las validaciones, incluir la nota
@@ -512,5 +515,313 @@ export class SapInvoiceService {
     }
 
     return '❌ Error desconocido';
+  }
+
+  async getDeliveryNotesWithErrors(
+    docEntry?: string,
+    cardCode?: string,
+  ): Promise<DeliveryNoteErrorDto[]> {
+    const companies = this.getCompanies();
+    const errors: DeliveryNoteErrorDto[] = [];
+
+    // Si se proporciona docEntry o cardCode, solo buscamos en las empresas hasta encontrar la nota
+    if (docEntry || cardCode) {
+      for (const company of companies) {
+        const sessionId = await this.loginToSap(company);
+        if (!sessionId) {
+          this.logger.error(`No se pudo iniciar sesión en SAP para ${company}`);
+          continue;
+        }
+
+        try {
+          const deliveryNotes = await this.fetchDeliveryNotes(
+            sessionId,
+            company,
+          );
+
+          // Filtrar notas según los parámetros de búsqueda
+          const filteredNotes = deliveryNotes.filter((note) => {
+            if (docEntry && note.DocEntry.toString() !== docEntry) {
+              return false;
+            }
+            if (cardCode && note.CardCode !== cardCode) {
+              return false;
+            }
+            return true;
+          });
+
+          if (filteredNotes.length > 0) {
+            for (const note of filteredNotes) {
+              // Verificar si la nota ya fue facturada
+              const isAlreadyInvoiced = await this.checkIfAlreadyInvoiced(
+                sessionId,
+                note.DocEntry,
+              );
+              if (isAlreadyInvoiced) {
+                errors.push({
+                  docEntry: note.DocEntry,
+                  cardCode: note.CardCode,
+                  docDate: note.DocDate || '',
+                  error: 'La nota ya fue facturada anteriormente',
+                  company,
+                  sePuedeFacturar: false,
+                });
+                continue;
+              }
+
+              // Verificar si es público general y no han pasado 72 horas
+              const publicoGeneralCodes =
+                this.publicoGeneralCardCodes[company] ?? [];
+              const isPublicoGeneral = publicoGeneralCodes.includes(
+                note.CardCode,
+              );
+
+              if (isPublicoGeneral) {
+                const noteDate = new Date(note.DocDate || '');
+                const today = new Date();
+                const hoursDiff =
+                  (today.getTime() - noteDate.getTime()) / (1000 * 60 * 60);
+
+                if (hoursDiff < 72) {
+                  errors.push({
+                    docEntry: note.DocEntry,
+                    cardCode: note.CardCode,
+                    docDate: note.DocDate || '',
+                    error: `Pendiente de 72 horas - Horas transcurridas: ${Math.round(hoursDiff)}, Horas restantes: ${Math.round(72 - hoursDiff)}`,
+                    company,
+                    sePuedeFacturar: false,
+                  });
+                  continue;
+                }
+              }
+
+              // Verificar otros criterios
+              if (!note.DocDate) {
+                errors.push({
+                  docEntry: note.DocEntry,
+                  cardCode: note.CardCode,
+                  docDate: '',
+                  error: 'Sin fecha de documento',
+                  company,
+                  sePuedeFacturar: false,
+                });
+                continue;
+              }
+
+              if (!note.DocumentLines || note.DocumentLines.length === 0) {
+                errors.push({
+                  docEntry: note.DocEntry,
+                  cardCode: note.CardCode,
+                  docDate: note.DocDate || '',
+                  error: 'Sin líneas de documento',
+                  company,
+                  sePuedeFacturar: false,
+                });
+                continue;
+              }
+
+              if (!note.DocCurrency) {
+                errors.push({
+                  docEntry: note.DocEntry,
+                  cardCode: note.CardCode,
+                  docDate: note.DocDate || '',
+                  error: 'Sin moneda definida',
+                  company,
+                  sePuedeFacturar: false,
+                });
+                continue;
+              }
+
+              // Verificar tipos de cambio solo para Alianza y Manufacturing
+              if (
+                company === 'SBO_Alianza' ||
+                company === 'SBO_MANUFACTURING'
+              ) {
+                const tiposDeCambio = new Set(
+                  note.DocumentLines.map((line) => line.Rate),
+                );
+                if (tiposDeCambio.size > 1) {
+                  errors.push({
+                    docEntry: note.DocEntry,
+                    cardCode: note.CardCode,
+                    docDate: note.DocDate || '',
+                    error: `Múltiples tipos de cambio encontrados: ${Array.from(tiposDeCambio).join(', ')}`,
+                    company,
+                    sePuedeFacturar: false,
+                  });
+                  continue;
+                }
+              }
+
+              // Si llegamos aquí, la nota se puede facturar
+              errors.push({
+                docEntry: note.DocEntry,
+                cardCode: note.CardCode,
+                docDate: note.DocDate || '',
+                error:
+                  'La nota cumple con todos los criterios para ser facturada',
+                company,
+                sePuedeFacturar: true,
+              });
+            }
+            // Si encontramos la nota, no necesitamos seguir buscando en otras empresas
+            break;
+          }
+        } catch (error) {
+          this.logger.error(
+            `Error obteniendo notas con errores en ${company}: ${this.getErrorMessage(error)}`,
+          );
+        } finally {
+          await this.logoutFromSap(sessionId);
+        }
+      }
+
+      // Si no encontramos la nota en ninguna empresa
+      if (errors.length === 0) {
+        const mensaje = docEntry
+          ? `No se encontró la nota con DocEntry ${docEntry}`
+          : `No se encontraron notas para el cliente con CardCode ${cardCode}`;
+
+        errors.push({
+          docEntry: docEntry ? parseInt(docEntry) : 0,
+          cardCode: cardCode || '',
+          docDate: '',
+          error: mensaje,
+          company: '',
+          sePuedeFacturar: false,
+        });
+      }
+
+      return errors;
+    }
+
+    // Si no se proporciona docEntry ni cardCode, buscamos todas las notas con errores
+    for (const company of companies) {
+      const sessionId = await this.loginToSap(company);
+      if (!sessionId) {
+        this.logger.error(`No se pudo iniciar sesión en SAP para ${company}`);
+        continue;
+      }
+
+      try {
+        const deliveryNotes = await this.fetchDeliveryNotes(sessionId, company);
+
+        for (const note of deliveryNotes) {
+          // Verificar si la nota ya fue facturada
+          const isAlreadyInvoiced = await this.checkIfAlreadyInvoiced(
+            sessionId,
+            note.DocEntry,
+          );
+          if (isAlreadyInvoiced) {
+            errors.push({
+              docEntry: note.DocEntry,
+              cardCode: note.CardCode,
+              docDate: note.DocDate || '',
+              error: 'La nota ya fue facturada anteriormente',
+              company,
+              sePuedeFacturar: false,
+            });
+            continue;
+          }
+
+          // Verificar si es público general y no han pasado 72 horas
+          const publicoGeneralCodes =
+            this.publicoGeneralCardCodes[company] ?? [];
+          const isPublicoGeneral = publicoGeneralCodes.includes(note.CardCode);
+
+          if (isPublicoGeneral) {
+            const noteDate = new Date(note.DocDate || '');
+            const today = new Date();
+            const hoursDiff =
+              (today.getTime() - noteDate.getTime()) / (1000 * 60 * 60);
+
+            if (hoursDiff < 72) {
+              errors.push({
+                docEntry: note.DocEntry,
+                cardCode: note.CardCode,
+                docDate: note.DocDate || '',
+                error: `Pendiente de 72 horas - Horas transcurridas: ${Math.round(hoursDiff)}, Horas restantes: ${Math.round(72 - hoursDiff)}`,
+                company,
+                sePuedeFacturar: false,
+              });
+              continue;
+            }
+          }
+
+          // Verificar otros criterios
+          if (!note.DocDate) {
+            errors.push({
+              docEntry: note.DocEntry,
+              cardCode: note.CardCode,
+              docDate: '',
+              error: 'Sin fecha de documento',
+              company,
+              sePuedeFacturar: false,
+            });
+            continue;
+          }
+
+          if (!note.DocumentLines || note.DocumentLines.length === 0) {
+            errors.push({
+              docEntry: note.DocEntry,
+              cardCode: note.CardCode,
+              docDate: note.DocDate || '',
+              error: 'Sin líneas de documento',
+              company,
+              sePuedeFacturar: false,
+            });
+            continue;
+          }
+
+          if (!note.DocCurrency) {
+            errors.push({
+              docEntry: note.DocEntry,
+              cardCode: note.CardCode,
+              docDate: note.DocDate || '',
+              error: 'Sin moneda definida',
+              company,
+              sePuedeFacturar: false,
+            });
+            continue;
+          }
+
+          // Verificar tipos de cambio solo para Alianza y Manufacturing
+          if (company === 'SBO_Alianza' || company === 'SBO_MANUFACTURING') {
+            const tiposDeCambio = new Set(
+              note.DocumentLines.map((line) => line.Rate),
+            );
+            if (tiposDeCambio.size > 1) {
+              errors.push({
+                docEntry: note.DocEntry,
+                cardCode: note.CardCode,
+                docDate: note.DocDate || '',
+                error: `Múltiples tipos de cambio encontrados: ${Array.from(tiposDeCambio).join(', ')}`,
+                company,
+                sePuedeFacturar: false,
+              });
+              continue;
+            }
+          }
+
+          // Si llegamos aquí, la nota se puede facturar
+          errors.push({
+            docEntry: note.DocEntry,
+            cardCode: note.CardCode,
+            docDate: note.DocDate || '',
+            error: 'La nota cumple con todos los criterios para ser facturada',
+            company,
+            sePuedeFacturar: true,
+          });
+        }
+      } catch (error) {
+        this.logger.error(
+          `Error obteniendo notas con errores en ${company}: ${this.getErrorMessage(error)}`,
+        );
+      } finally {
+        await this.logoutFromSap(sessionId);
+      }
+    }
+
+    return errors;
   }
 }
